@@ -1,0 +1,61 @@
+# Draw90 zorunlu güncelleme: TARGET sürümü App Store'da (TR ve US) görünür
+# olduğu anda app-version.json'daki minimumVersion'ı TARGET yapar. Öncesinde
+# dokunmaz: güncelleme ekranı mağazada güncelleme yokken çıkmamalı.
+# Yeni bir zorunlu sürüm için yalnız TARGET değişir.
+name: force-update
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  TARGET: "1.3.0"
+  APP_ID: "6825044163"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mağazadaki sürümü kontrol et, gerekirse minimumVersion'ı yükselt
+        run: |
+          python3 - <<'PY'
+          import json, os, sys, urllib.request
+
+          target = os.environ["TARGET"]
+          app_id = os.environ["APP_ID"]
+          key = lambda v: [int(x) for x in v.split(".")] + [0] * (4 - len(v.split(".")))
+
+          with open("app-version.json") as f:
+              policy = json.load(f)
+          if key(policy["minimumVersion"]) >= key(target):
+              print(f"minimumVersion zaten {policy['minimumVersion']}")
+              sys.exit(0)
+
+          for country in ("tr", "us"):
+              url = f"https://itunes.apple.com/lookup?id={app_id}&country={country}"
+              with urllib.request.urlopen(url, timeout=20) as r:
+                  results = json.load(r)["results"]
+              store = results[0]["version"] if results else "0"
+              print(f"{country}: mağazada {store}")
+              if key(store) < key(target):
+                  print(f"{target} henüz {country} mağazasında değil, bekleniyor")
+                  sys.exit(0)
+
+          policy["minimumVersion"] = target
+          with open("app-version.json", "w") as f:
+              json.dump(policy, f, indent=2)
+              f.write("\n")
+          print(f"minimumVersion -> {target}")
+          PY
+      - name: Commit
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "minimumVersion ${TARGET}: sürüm App Store'da"
+          git push
